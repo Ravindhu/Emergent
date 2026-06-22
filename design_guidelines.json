@@ -1,0 +1,166 @@
+{
+  "app_name": "Prop Firm Risk Matrix & Strategy Simulator",
+  "personality": "6 Glass / Luxe DARK fused with 7 Dark-First Utility density",
+  "personality_one_liner": "A premium, quantitative hedge-fund aesthetic balancing high-density data visibility with cinematic dark-mode glassmorphism.",
+  "color": {
+    "surface": "#121212",
+    "onSurface": "#FFFFFF",
+    "surfaceSecondary": "#1E1E24",
+    "onSurfaceSecondary": "#B8BCC8",
+    "surfaceTertiary": "#252530",
+    "onSurfaceTertiary": "#A0A5B5",
+    "surfaceInverse": "#FFFFFF",
+    "onSurfaceInverse": "#121212",
+    "brand": "#FFFFFF",
+    "brandPrimary": "#FFFFFF",
+    "onBrandPrimary": "#121212",
+    "brandSecondary": "#2A2A35",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#252530",
+    "onBrandTertiary": "#FFFFFF",
+    "success": "#00FF88",
+    "onSuccess": "#121212",
+    "warning": "#FFD54F",
+    "onWarning": "#121212",
+    "error": "#FF5252",
+    "onError": "#FFFFFF",
+    "info": "#38BDF8",
+    "onInfo": "#121212",
+    "border": "#2A2A35",
+    "borderStrong": "#3F3F50",
+    "divider": "#2A2A35"
+  },
+  "typography": {
+    "displayFontFamily": "Space Grotesk",
+    "textFontFamily": "Plus Jakarta Sans",
+    "monoFontFamily": "JetBrains Mono",
+    "scale": {
+      "xs": 10,
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24,
+      "3xl": 32
+    }
+  },
+  "spacing": {
+    "rule": "Use tight, utility-focused spacing to maximize data density while preserving tap targets. Cards use `md` padding; data rows use `sm`.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Apply to sticky headers, bottom tab bar, and bottom sheet headers",
+      "Apply to the floating 'Run Sim' / 'Control Panel' action buttons",
+      "Use 75%+ opacity #1E1E24 tint underneath blur to guarantee data readability"
+    ],
+    "dont's": [
+      "Never apply to dense data tables, heatmaps, or charts",
+      "Do not use on standard list rows or KPI cards (use solid #1E1E24)"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler",
+    "charts": "react-native-gifted-charts"
+  },
+  "screens": [
+    {
+      "name": "Dashboard",
+      "purpose": "High-level command center showing aggregated KPIs (Pass Probability, Expected ROI, Drawdown).",
+      "states": {
+        "loading": "Skeleton grids mapping to the KPI card layout.",
+        "empty": "Prompt user to 'Configure Strategy Parameters' to see KPIs.",
+        "error": "Failed to calculate simulation; Retry button."
+      },
+      "layout": "Top section: 2-column grid of essential KPI cards (Pass Probability, Profit Factor). Middle: Condensed mini-chart of expected equity. Bottom sticky floating CTA: 'Control Panel' (opens bottom sheet for inputs)."
+    },
+    {
+      "name": "Matrices",
+      "purpose": "Interactive heatmaps showing Pass Probability and ROI across Risk % and RR ratios.",
+      "states": {
+        "loading": "Shimmering grid overlay.",
+        "empty": "Provide a placeholder heatmap with muted colors until parameters are set.",
+        "error": "Data rendering error; Reset parameters."
+      },
+      "layout": "Top: Segmented control to toggle between 'Pass Probability' and 'ROI Matrix'. Middle: ScrollView with pinch-to-zoom containing the 8x16 heatmap. Cells colored dynamically (Red 0-35%, Amber 36-64%, Green 65-100%). Bottom: Tap a cell to open a detail bottom sheet."
+    },
+    {
+      "name": "Simulator",
+      "purpose": "Monte Carlo and Drawdown analytics visualizer.",
+      "states": {
+        "loading": "Spinner over an empty axis chart.",
+        "empty": "No simulations run; prompt 'Run Sim'.",
+        "error": "Chart error; reload."
+      },
+      "layout": "Vertical scroll. 1. Monte Carlo Equity Curve chart (20 paths + 95% band). 2. Drawdown Analysis scatter/line chart. 3. Drawdown Recovery bar chart. Use 'react-native-gifted-charts' with dark-themed gridlines (#2A2A35) and neon/cyan/green line strokes."
+    },
+    {
+      "name": "Tools",
+      "purpose": "Access point for Strategy Analyzer, Optimizer, Account Comparison, and Settings.",
+      "states": {
+        "loading": "List skeleton.",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "List layout of cards for 'Strategy Analyzer', 'Optimizer', 'Account Comparison', and 'Settings'. Clicking a card pushes a stack screen. Account Comparison uses a horizontal scrollable table."
+    },
+    {
+      "name": "Control Panel (Bottom Sheet)",
+      "purpose": "The main input surface for all numeric and toggle variables.",
+      "states": {
+        "loading": "N/A",
+        "empty": "N/A",
+        "error": "Validation errors below invalid inputs."
+      },
+      "layout": "Full-screen or 90% snap point Bottom Sheet. Categorized single-column form: Account Params, Strategy Params, Simulation Rules. Features a sticky 'Run Simulation' primary CTA at the bottom."
+    }
+  ],
+  "images": {
+    "empty_state_dashboard": {
+      "url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=2070&auto=format&fit=crop",
+      "dark": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=2070&auto=format&fit=crop",
+      "alt": "Abstract dark mesh quantitative background"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the user's color palette: Background #121212, Cards #1E1E24, Panels #252530, Success #00FF88, Warning #FFD54F, Danger #FF5252, Text #FFFFFF, Muted #B8BCC8.",
+    "Use JetBrains Mono for all heatmap data cells, numeric KPIs, and chart axes to ensure tabular alignment.",
+    "Heatmap Construction: A 8x16 grid will overflow standard mobile screens. Wrap it in a horizontal and vertical ScrollView to allow panning. Color logic must strictly follow user thresholds: 0-35% (#FF5252), 36-64% (#FFD54F), 65-100% (#00FF88).",
+    "Charts: For `react-native-gifted-charts`, style axes and grid lines with `#2A2A35` (border color) to prevent them from overpowering the data. The 95% confidence band should use a translucent fill under the main path.",
+    "Input Layout: Since there are many variables (Account Size, Win Rate, DD, Consistency, etc.), group them logically inside the Control Panel bottom sheet, using toggles and native numeric inputs.",
+    "Apply Glassmorphism cautiously: the Control Panel bottom sheet and bottom tab bar should use `expo-blur` layered over `surfaceSecondary` with 80% opacity to preserve background contrast.",
+    "Do NOT use standard blue/purple anywhere. The brand primary is a matte `#FFFFFF` (Linear-style design), allowing the neon Red/Amber/Green metrics to draw all the visual attention."
+  ],
+  "haptics": {
+    "button_press": "light",
+    "tab_switch": "selection",
+    "heatmap_cell_tap": "medium",
+    "toggle_switch": "light",
+    "run_simulation": "success"
+  }
+}
