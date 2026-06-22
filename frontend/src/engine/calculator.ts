@@ -438,16 +438,17 @@ export const passProbabilityClosedForm = (
   let dailySurvival = 1;
   if (dailyDDPct > 0 && tradesPerDay > 0 && riskPct > 0 && p < 1) {
     const k = Math.max(2, Math.floor(dailyDDPct / riskPct)); // consecutive losses to blow day
-    const pDayFail = Math.pow(q, k);
-    // Days to target ≈ profitTarget / (expectancyPerTrade * tradesPerDay)
+    // Daily failure probability scales with the # of "windows" of k trades inside the day —
+    // more trades per day → more chances to hit a k-loss streak.
+    const windows = Math.max(1, tradesPerDay - k + 1);
+    const pDayFail = Math.min(0.6, windows * Math.pow(q, k));
+    // Days to target. Use a sublinear speed-up so increasing TPD doesn't fully cancel hazard.
     const expR = p * rr - q;
     if (expR > 0) {
       const tradesToTarget = unitsTarget / expR;
-      const days = Math.max(1, tradesToTarget / tradesPerDay);
+      const effectiveTPD = Math.sqrt(Math.max(1, tradesPerDay) * 5); // damped
+      const days = Math.max(1, tradesToTarget / effectiveTPD);
       dailySurvival = Math.pow(1 - pDayFail, days);
-    } else {
-      // Negative edge — daily DD doesn't add much; ruin dominates
-      dailySurvival = 1;
     }
   }
   return Math.max(0, Math.min(100, gambler * dailySurvival * 100));
