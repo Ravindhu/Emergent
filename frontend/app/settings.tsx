@@ -14,7 +14,7 @@ export default function Settings() {
     <SafeAreaView style={s.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={s.header}>
-        <Pressable onPress={() => router.back()} style={s.back}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
+        <Pressable testID="back-button" onPress={() => router.back()} style={s.back}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
         <View>
           <Text style={s.eyebrow}>PREFERENCES</Text>
           <Text style={s.title}>Settings</Text>

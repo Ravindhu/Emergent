@@ -27,7 +27,8 @@ export default function Dashboard() {
     const ror = riskOfRuin(inputs.winRate, inputs.rr, inputs.riskPerTradePct, inputs.maxDrawdownPct);
     const pass = passProbabilityClosedForm(
       inputs.winRate, inputs.rr, inputs.riskPerTradePct,
-      inputs.profitTargetPct, inputs.maxDrawdownPct
+      inputs.profitTargetPct, inputs.maxDrawdownPct,
+      inputs.dailyDrawdownPct, inputs.tradesPerDay
     );
     const avgWin = avgStreak(inputs.winRate / 100);
     const avgLoss = avgStreak(1 - inputs.winRate / 100);

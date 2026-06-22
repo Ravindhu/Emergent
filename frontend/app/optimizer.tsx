@@ -26,7 +26,11 @@ export default function Optimizer() {
     const candidates: any[] = [];
     RISK_LEVELS.forEach(risk => {
       RR_LEVELS.forEach(rr => {
-        const pass = passProbabilityClosedForm(inputs.winRate, rr, risk, inputs.profitTargetPct, inputs.maxDrawdownPct);
+        const pass = passProbabilityClosedForm(
+          inputs.winRate, rr, risk,
+          inputs.profitTargetPct, inputs.maxDrawdownPct,
+          inputs.dailyDrawdownPct, inputs.tradesPerDay
+        );
         const ror = riskOfRuin(inputs.winRate, rr, risk, inputs.maxDrawdownPct);
         const profit = target * (inputs.profitSplitPct / 100);
         const expected = (pass / 100) * profit;
@@ -38,9 +42,28 @@ export default function Optimizer() {
         candidates.push({ risk, rr, pass, ror, roi, dd, grade });
       });
     });
-    const safe = [...candidates].filter(c => c.ror <= 0.05).sort((a, b) => b.pass - a.pass)[0] ?? candidates[0];
-    const balanced = [...candidates].filter(c => c.ror <= 0.15 && c.pass >= 50).sort((a, b) => b.roi - a.roi)[0] ?? candidates[0];
-    const aggressive = [...candidates].sort((a, b) => b.roi - a.roi)[0] ?? candidates[0];
+    // SAFE: minimize risk and RR together among candidates with high pass (>=70%).
+    //   Forces the lowest-risk corner of the matrix.
+    const safe = [...candidates]
+      .filter(c => c.pass >= 70)
+      .sort((a, b) => (a.risk + a.rr) - (b.risk + b.rr) || a.ror - b.ror)[0]
+      ?? [...candidates].sort((a, b) => a.ror - b.ror || (a.risk - b.risk))[0];
+    // BALANCED: target the "fund-grade" zone — risk ≈ 1%, rr ≈ 2.
+    //   Reward high pass, penalize distance from the sweet spot.
+    const balanced = [...candidates]
+      .filter(c => c.pass >= 60 && c.ror <= 0.15)
+      .sort((a, b) => {
+        const scoreA = a.pass - 80 * Math.abs(a.rr - 2) - 80 * Math.abs(a.risk - 1);
+        const scoreB = b.pass - 80 * Math.abs(b.rr - 2) - 80 * Math.abs(b.risk - 1);
+        return scoreB - scoreA;
+      })[0]
+      ?? [...candidates].sort((a, b) => b.roi - a.roi)[0];
+    // AGGRESSIVE: maximize raw growth potential — high risk × high RR product.
+    //   Filter by pass >= 30 so we don't pick obvious suicide bets.
+    const aggressive = [...candidates]
+      .filter(c => c.pass >= 30)
+      .sort((a, b) => (b.risk * b.rr) - (a.risk * a.rr) || (b.roi - a.roi))[0]
+      ?? [...candidates].sort((a, b) => b.roi - a.roi)[0];
     const toReco = (c: any): Reco => ({ ...c, positionSize: inputs.accountSize * (c.risk / 100) });
     return { safe: toReco(safe), balanced: toReco(balanced), aggressive: toReco(aggressive) };
   }, [inputs]);
@@ -97,7 +120,7 @@ export default function Optimizer() {
     <SafeAreaView style={s.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={s.header}>
-        <Pressable onPress={() => router.back()} style={s.back}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
+        <Pressable testID="back-button" onPress={() => router.back()} style={s.back}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
         <View>
           <Text style={s.eyebrow}>RECOMMENDER</Text>
           <Text style={s.title}>Strategy Optimizer</Text>

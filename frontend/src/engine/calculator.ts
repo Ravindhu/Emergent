@@ -398,14 +398,15 @@ export const RISK_LEVELS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.
 export const RR_LEVELS = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
 
 // Quick closed-form pass% approximation:
-// Uses risk-of-ruin inverse + drift-based estimate.
-// pass = 1 - RoR_target  where ruin threshold is the profit target (mirror)
+// Uses gambler's ruin × daily-DD survival hazard.
 export const passProbabilityClosedForm = (
   winRatePct: number,
   rr: number,
   riskPct: number,
   profitTargetPct: number,
-  maxDDPct: number
+  maxDDPct: number,
+  dailyDDPct: number = 0,
+  tradesPerDay: number = 0
 ): number => {
   const p = winRatePct / 100;
   const q = 1 - p;
@@ -417,20 +418,37 @@ export const passProbabilityClosedForm = (
   const unitsRuin = riskPct > 0 ? maxDDPct / riskPct : 1000;
   // Gambler's ruin (asymmetric random walk): P(reach +T before -R)
   // Works for any non-zero A (positive or negative edge)
-  if (A === 0) return (unitsRuin / (unitsRuin + unitsTarget)) * 100;
-  const r = (1 - A) / (1 + A); // r<1 for +edge, r>1 for -edge
-  // Use log form to avoid overflow for large unit counts (e.g. tiny risk %)
-  // P = (1 - r^R) / (1 - r^(R+T)); when r>1 and R is large, both terms blow up.
-  // Use the equivalent formulation: P = (r^-R - 1)/(r^-R - r^T) when r>1 (multiply num/den by r^-R)
-  // Or clamp the exponent: cap units so the calc is well-conditioned.
-  const cap = 200;
-  const R = Math.min(unitsRuin, cap);
-  const T = Math.min(unitsTarget, cap);
-  const num = 1 - Math.pow(r, R);
-  const den = 1 - Math.pow(r, R + T);
-  if (!isFinite(num) || !isFinite(den) || den === 0) {
-    // Asymptotic: positive edge → near 100%, negative edge → near 0%
-    return A > 0 ? 100 : 0;
+  let gambler: number;
+  if (A === 0) {
+    gambler = unitsRuin / (unitsRuin + unitsTarget);
+  } else {
+    const r = (1 - A) / (1 + A);
+    const cap = 200;
+    const R = Math.min(unitsRuin, cap);
+    const T = Math.min(unitsTarget, cap);
+    const num = 1 - Math.pow(r, R);
+    const den = 1 - Math.pow(r, R + T);
+    if (!isFinite(num) || !isFinite(den) || den === 0) {
+      gambler = A > 0 ? 1 : 0;
+    } else {
+      gambler = Math.max(0, Math.min(1, num / den));
+    }
   }
-  return Math.max(0, Math.min(100, (num / den) * 100));
+  // Daily DD survival hazard — applies when both daily-DD and trades-per-day are given.
+  let dailySurvival = 1;
+  if (dailyDDPct > 0 && tradesPerDay > 0 && riskPct > 0 && p < 1) {
+    const k = Math.max(2, Math.floor(dailyDDPct / riskPct)); // consecutive losses to blow day
+    const pDayFail = Math.pow(q, k);
+    // Days to target ≈ profitTarget / (expectancyPerTrade * tradesPerDay)
+    const expR = p * rr - q;
+    if (expR > 0) {
+      const tradesToTarget = unitsTarget / expR;
+      const days = Math.max(1, tradesToTarget / tradesPerDay);
+      dailySurvival = Math.pow(1 - pDayFail, days);
+    } else {
+      // Negative edge — daily DD doesn't add much; ruin dominates
+      dailySurvival = 1;
+    }
+  }
+  return Math.max(0, Math.min(100, gambler * dailySurvival * 100));
 };

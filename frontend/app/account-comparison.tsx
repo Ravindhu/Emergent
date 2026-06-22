@@ -31,7 +31,11 @@ export default function AccountComparison() {
       const fee = feeFor(size);
       const target = size * (inputs.profitTargetPct / 100);
       const maxDD = size * (inputs.maxDrawdownPct / 100);
-      const pass = passProbabilityClosedForm(inputs.winRate, inputs.rr, inputs.riskPerTradePct, inputs.profitTargetPct, inputs.maxDrawdownPct);
+      const pass = passProbabilityClosedForm(
+        inputs.winRate, inputs.rr, inputs.riskPerTradePct,
+        inputs.profitTargetPct, inputs.maxDrawdownPct,
+        inputs.dailyDrawdownPct, inputs.tradesPerDay
+      );
       const expectedPayout = (pass / 100) * target * (inputs.profitSplitPct / 100);
       const roi = fee > 0 ? ((expectedPayout - fee) / fee) * 100 : 0;
       // Difficulty: bigger accounts demand more $ but pct stays same → score the value (smaller = harder funding wise but lower fee)
@@ -53,7 +57,7 @@ export default function AccountComparison() {
     <SafeAreaView style={s.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={s.header}>
-        <Pressable onPress={() => router.back()} style={s.back}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
+        <Pressable testID="back-button" onPress={() => router.back()} style={s.back}><Ionicons name="chevron-back" size={22} color={colors.text} /></Pressable>
         <View>
           <Text style={s.eyebrow}>SELECTION</Text>
           <Text style={s.title}>Account Comparison</Text>

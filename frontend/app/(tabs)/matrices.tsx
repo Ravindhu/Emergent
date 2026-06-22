@@ -23,7 +23,11 @@ export default function MatricesScreen() {
     const targetDollar = inputs.accountSize * (inputs.profitTargetPct / 100);
     return RISK_LEVELS.map((risk) => {
       return RR_LEVELS.map((rr) => {
-        const pass = passProbabilityClosedForm(inputs.winRate, rr, risk, inputs.profitTargetPct, inputs.maxDrawdownPct);
+        const pass = passProbabilityClosedForm(
+          inputs.winRate, rr, risk,
+          inputs.profitTargetPct, inputs.maxDrawdownPct,
+          inputs.dailyDrawdownPct, inputs.tradesPerDay
+        );
         // EV per challenge = pass% * (profit * split) - (1 - pass%) * fee
         const profit = targetDollar * (inputs.profitSplitPct / 100);
         const ev = (pass / 100) * profit - (1 - pass / 100) * inputs.challengeFee;

@@ -25,7 +25,7 @@ export default function StrategyAnalyzer() {
     const exp = expectancyR(inputs.winRate, inputs.rr);
     const pf = profitFactor(inputs.winRate, inputs.rr);
     const ror = result?.riskOfRuinSim ?? riskOfRuin(inputs.winRate, inputs.rr, inputs.riskPerTradePct, inputs.maxDrawdownPct);
-    const pass = result?.passProbability ?? passProbabilityClosedForm(inputs.winRate, inputs.rr, inputs.riskPerTradePct, inputs.profitTargetPct, inputs.maxDrawdownPct);
+    const pass = result?.passProbability ?? passProbabilityClosedForm(inputs.winRate, inputs.rr, inputs.riskPerTradePct, inputs.profitTargetPct, inputs.maxDrawdownPct, inputs.dailyDrawdownPct, inputs.tradesPerDay);
     const avgWin = result?.avgWinStreak ?? avgStreak(inputs.winRate / 100);
     const avgLoss = result?.avgLossStreak ?? avgStreak(1 - inputs.winRate / 100);
     const avgDD = result?.avgMaxDrawdownPct ?? (inputs.riskPerTradePct * avgLoss * 1.5);
