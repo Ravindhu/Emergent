@@ -23,20 +23,19 @@ export default function MatricesScreen() {
   const sheet = useRef<BottomSheet>(null);
   const { inputs } = useStrategy();
   const [mode, setMode] = useState<"pass" | "roi">("pass");
-  const [wrMode, setWrMode] = useState<"iso" | "fixed">("iso");
+  const [wrMode, setWrMode] = useState<"stepped" | "fixed">("stepped");
   const [selected, setSelected] = useState<{ ri: number; ci: number } | null>(null);
 
   // Derive per-column WR
-  // - iso: solve p*rr - (1-p) = userExpectancy → p = (E + 1)/(rr + 1)
-  // - fixed: use user's input WR for all columns
-  const userExp = useMemo(() => expectancyR(inputs.winRate, inputs.rr), [inputs.winRate, inputs.rr]);
+  // - stepped: equally-divided WR from 90% down to 20% across the 8 RR columns
+  // - fixed:   use user's input WR for all columns
   const colWRs = useMemo<number[]>(() => {
     if (wrMode === "fixed") return RR_LEVELS.map(() => inputs.winRate);
-    return RR_LEVELS.map(rr => {
-      const p = (userExp + 1) / (rr + 1);
-      return Math.max(1, Math.min(99, p * 100));
-    });
-  }, [wrMode, inputs.winRate, userExp]);
+    const hi = 90;
+    const lo = 20;
+    const n = RR_LEVELS.length;
+    return RR_LEVELS.map((_, i) => hi - ((hi - lo) * i) / (n - 1));
+  }, [wrMode, inputs.winRate]);
 
   // Compute cells via mini-Monte-Carlo respecting user's DD mode (trailing/static).
   // 16 × 8 = 128 cells × 200 paths × 300 trades ≈ 7.7M iterations → <1s on modern devices.
@@ -133,8 +132,8 @@ export default function MatricesScreen() {
           </Pressable>
         </View>
         <View style={s.segmentSmall}>
-          <Pressable testID="seg-iso" onPress={() => setWrMode("iso")} style={[s.segBtnSm, wrMode === "iso" && s.segActiveAlt]}>
-            <Text style={[s.segTxtSm, wrMode === "iso" && s.segTxtActiveAlt]}>Iso-E</Text>
+          <Pressable testID="seg-stepped" onPress={() => setWrMode("stepped")} style={[s.segBtnSm, wrMode === "stepped" && s.segActiveAlt]}>
+            <Text style={[s.segTxtSm, wrMode === "stepped" && s.segTxtActiveAlt]}>Stepped</Text>
           </Pressable>
           <Pressable testID="seg-fixed" onPress={() => setWrMode("fixed")} style={[s.segBtnSm, wrMode === "fixed" && s.segActiveAlt]}>
             <Text style={[s.segTxtSm, wrMode === "fixed" && s.segTxtActiveAlt]}>Fixed WR</Text>
@@ -144,8 +143,8 @@ export default function MatricesScreen() {
 
       <ScrollView contentContainerStyle={s.scroll}>
         <Text style={s.caption}>
-          {wrMode === "iso"
-            ? `Each column's WR is calibrated to expectancy ${userExp.toFixed(2)} R — isolating the variance effect.`
+          {wrMode === "stepped"
+            ? `Each column's WR is stepped equally from 90% down to 20% across the 8 RR levels.`
             : `All columns use your input win rate of ${inputs.winRate}% — varying RR only.`}
           {`  ·  DD mode: ${inputs.ddMode}`}
         </Text>
