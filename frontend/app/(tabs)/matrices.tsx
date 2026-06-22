@@ -23,19 +23,22 @@ export default function MatricesScreen() {
   const sheet = useRef<BottomSheet>(null);
   const { inputs } = useStrategy();
   const [mode, setMode] = useState<"pass" | "roi">("pass");
-  const [wrMode, setWrMode] = useState<"stepped" | "fixed">("stepped");
+  const [wrMode, setWrMode] = useState<"iso" | "fixed">("iso");
   const [selected, setSelected] = useState<{ ri: number; ci: number } | null>(null);
 
   // Derive per-column WR
-  // - stepped: equally-divided WR from 90% down to 20% across the 8 RR columns
-  // - fixed:   use user's input WR for all columns
+  // - iso: solve p*rr - (1-p) = userExpectancy → p = (E + 1)/(rr + 1)
+  //   This makes ALL columns share the user's current expectancy, isolating the variance effect.
+  //   When the user adjusts WR or RR, every column's WR shifts → cells change accordingly.
+  // - fixed: use user's input WR for all columns (varying only RR).
+  const userExp = useMemo(() => expectancyR(inputs.winRate, inputs.rr), [inputs.winRate, inputs.rr]);
   const colWRs = useMemo<number[]>(() => {
     if (wrMode === "fixed") return RR_LEVELS.map(() => inputs.winRate);
-    const hi = 90;
-    const lo = 20;
-    const n = RR_LEVELS.length;
-    return RR_LEVELS.map((_, i) => hi - ((hi - lo) * i) / (n - 1));
-  }, [wrMode, inputs.winRate]);
+    return RR_LEVELS.map(rr => {
+      const p = (userExp + 1) / (rr + 1);
+      return Math.max(1, Math.min(99, p * 100));
+    });
+  }, [wrMode, inputs.winRate, userExp]);
 
   // Compute cells via mini-Monte-Carlo respecting user's DD mode (trailing/static).
   // 16 × 8 = 128 cells × 200 paths × 300 trades ≈ 7.7M iterations → <1s on modern devices.
@@ -45,13 +48,14 @@ export default function MatricesScreen() {
     return RISK_LEVELS.map((risk) =>
       RR_LEVELS.map((rr, ci) => {
         const wr = colWRs[ci];
-        // Allow enough trade horizon: at 0.25% risk × 0.10R expectancy → ~400 trades to target.
-        // Scale horizon to cell so slow-grinders don't time out before reaching target.
+        // Adaptive horizon = enough trades to give slow-grinders a fair chance.
+        // Floor at user's tradesPerSimulation so reducing it tightens the matrix.
         const expR = (wr / 100) * rr - (1 - wr / 100);
         const unitsTarget = inputs.profitTargetPct / risk;
-        const horizon = expR > 0
-          ? Math.max(200, Math.min(2000, Math.ceil((unitsTarget / expR) * 4)))
+        const adaptive = expR > 0
+          ? Math.ceil((unitsTarget / expR) * 4)
           : 600;
+        const horizon = Math.max(50, Math.min(2000, Math.max(adaptive, inputs.tradesPerSimulation)));
         const r = runSimulation({
           winRate: wr / 100,
           rr,
@@ -132,8 +136,8 @@ export default function MatricesScreen() {
           </Pressable>
         </View>
         <View style={s.segmentSmall}>
-          <Pressable testID="seg-stepped" onPress={() => setWrMode("stepped")} style={[s.segBtnSm, wrMode === "stepped" && s.segActiveAlt]}>
-            <Text style={[s.segTxtSm, wrMode === "stepped" && s.segTxtActiveAlt]}>Stepped</Text>
+          <Pressable testID="seg-iso" onPress={() => setWrMode("iso")} style={[s.segBtnSm, wrMode === "iso" && s.segActiveAlt]}>
+            <Text style={[s.segTxtSm, wrMode === "iso" && s.segTxtActiveAlt]}>Iso-E</Text>
           </Pressable>
           <Pressable testID="seg-fixed" onPress={() => setWrMode("fixed")} style={[s.segBtnSm, wrMode === "fixed" && s.segActiveAlt]}>
             <Text style={[s.segTxtSm, wrMode === "fixed" && s.segTxtActiveAlt]}>Fixed WR</Text>
@@ -143,8 +147,8 @@ export default function MatricesScreen() {
 
       <ScrollView contentContainerStyle={s.scroll}>
         <Text style={s.caption}>
-          {wrMode === "stepped"
-            ? `Each column's WR is stepped equally from 90% down to 20% across the 8 RR levels.`
+          {wrMode === "iso"
+            ? `Each column's WR is calibrated to your current expectancy of ${userExp.toFixed(2)} R (from ${inputs.winRate}% WR @ ${inputs.rr} RR). Cells respond to every input.`
             : `All columns use your input win rate of ${inputs.winRate}% — varying RR only.`}
           {`  ·  DD mode: ${inputs.ddMode}`}
         </Text>
