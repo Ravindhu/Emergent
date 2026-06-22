@@ -20,10 +20,16 @@ export interface StrategyInputs {
   simulationPaths: number;
   tradesPerSimulation: number;
   ddMode: DDMode;
+  // New fields for Risk/Reward Survival Matrix
+  edge: number;                  // R-multiple expectancy (default 0.10)
+  evaluationDays: number;        // # days in the challenge horizon
+  consistencyRuleOn: boolean;    // toggle (overrides consistencyRulePct == 0 logic for matrix)
+  consistencyThresholdPct: number; // default 30 — % of total profit
+  matrixSimulations: number;     // sims per cell in the matrix
 }
 
 export const defaultInputs: StrategyInputs = {
-  accountSize: 100000,
+  accountSize: 50000,
   profitTargetPct: 10,
   maxDrawdownPct: 10,
   dailyDrawdownPct: 5,
@@ -32,11 +38,16 @@ export const defaultInputs: StrategyInputs = {
   winRate: 50,
   rr: 2,
   riskPerTradePct: 1,
-  tradesPerDay: 5,
+  tradesPerDay: 1,
   consistencyRulePct: 0,
   simulationPaths: 500,
   tradesPerSimulation: 500,
   ddMode: "trailing",
+  edge: 0.10,
+  evaluationDays: 30,
+  consistencyRuleOn: false,
+  consistencyThresholdPct: 30,
+  matrixSimulations: 2000,
 };
 
 // ---------- Closed-form metrics ----------
@@ -395,7 +406,132 @@ export const runSimulation = (opts: SimOptions): SimResult => {
 // ---------- Heatmap helper: lightweight matrix computation ----------
 
 export const RISK_LEVELS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0];
-export const RR_LEVELS = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
+export const RR_LEVELS = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0];
+
+// ============================================================
+// MATRIX SIMULATOR — Risk/Reward Survival Matrix spec
+// Per (risk, RR) cell: returns pass% and average ending return % (across all sims)
+// ============================================================
+
+export interface MatrixCellOptions {
+  winRate: number;            // 0..1, derived from edge & rr by caller
+  rrRatio: number;
+  riskPct: number;            // % risked per trade (0..100)
+  totalTrades: number;        // tradesPerDay × evaluationDays
+  tradesPerDay: number;
+  profitTargetPct: number;    // % of account
+  maxDailyLossPct: number;    // % of account
+  maxOverallDDPct: number;    // % of account, TRAILING from peak
+  consistencyRuleOn: boolean;
+  consistencyThresholdPct: number;  // % of total profit
+  numSimulations: number;
+  seed: number;
+}
+
+export interface MatrixCell {
+  passPct: number;            // % of sims that passed
+  avgReturnPct: number;       // average ending account return % (ALL sims, including blown)
+  blownPct: number;
+}
+
+// Fast deterministic PRNG (xorshift-ish using Mulberry32)
+const makeRng = (seed: number) => {
+  let t = seed >>> 0;
+  return () => {
+    t = (t + 0x6D2B79F5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+export const simulateMatrixCell = (opts: MatrixCellOptions): MatrixCell => {
+  const {
+    winRate, rrRatio, riskPct,
+    totalTrades, tradesPerDay,
+    profitTargetPct, maxDailyLossPct, maxOverallDDPct,
+    consistencyRuleOn, consistencyThresholdPct,
+    numSimulations, seed,
+  } = opts;
+
+  const startEquity = 1.0;                              // normalised to 1.0
+  const winMul = 1 + rrRatio * (riskPct / 100);
+  const lossMul = 1 - (riskPct / 100);
+  const targetEq = startEquity * (1 + profitTargetPct / 100);
+  const dailyLossLimit = maxDailyLossPct / 100;          // as fraction
+  const trailingDDLimit = maxOverallDDPct / 100;
+  const consistThr = consistencyThresholdPct / 100;
+  const rng = makeRng(seed);
+
+  let passes = 0;
+  let blown = 0;
+  let sumReturn = 0;
+
+  for (let s = 0; s < numSimulations; s++) {
+    let equity = startEquity;
+    let peak = startEquity;
+    let dayStartEquity = startEquity;
+    let dayProfit = 0;
+    let maxDayProfit = 0;
+    let tradeInDay = 0;
+    let isBlown = false;
+    let reachedTarget = false;
+
+    for (let t = 0; t < totalTrades; t++) {
+      const win = rng() < winRate;
+      equity = win ? equity * winMul : equity * lossMul;
+
+      if (equity > peak) peak = equity;
+
+      // Trailing overall DD from peak
+      const trailDD = (peak - equity) / peak;
+      if (trailDD >= trailingDDLimit) {
+        isBlown = true;
+        break;
+      }
+      // Daily loss check (from start-of-day equity)
+      const dayPnL = equity - dayStartEquity;
+      if (-dayPnL / dayStartEquity >= dailyLossLimit) {
+        isBlown = true;
+        break;
+      }
+
+      tradeInDay += 1;
+      if (tradeInDay >= tradesPerDay) {
+        // close of day
+        if (dayPnL > maxDayProfit) maxDayProfit = dayPnL;
+        dayProfit += dayPnL;
+        tradeInDay = 0;
+        dayStartEquity = equity;
+      }
+
+      if (equity >= targetEq) {
+        reachedTarget = true;
+        // close partial day for consistency check
+        if (dayPnL > maxDayProfit) maxDayProfit = dayPnL;
+        break;
+      }
+    }
+
+    // End-of-sim consistency check (only meaningful if passed)
+    if (reachedTarget && consistencyRuleOn) {
+      const totalProfit = equity - startEquity;
+      if (totalProfit > 0 && maxDayProfit / totalProfit > consistThr) {
+        reachedTarget = false; // disqualified
+      }
+    }
+
+    if (reachedTarget) passes += 1;
+    if (isBlown) blown += 1;
+    sumReturn += (equity - startEquity); // already a fraction (0.1 = +10%)
+  }
+
+  return {
+    passPct: (passes / numSimulations) * 100,
+    avgReturnPct: (sumReturn / numSimulations) * 100,
+    blownPct: (blown / numSimulations) * 100,
+  };
+};
 
 // Quick closed-form pass% approximation:
 // Uses gambler's ruin × daily-DD survival hazard.

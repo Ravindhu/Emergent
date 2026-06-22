@@ -1,217 +1,321 @@
-import React, { useMemo, useRef, useState } from "react";
-import { View, Text, StyleSheet, Pressable, ScrollView } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  View, Text, StyleSheet, ScrollView, Pressable, TextInput, Switch,
+  ActivityIndicator,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import BottomSheet from "@gorhom/bottom-sheet";
-import { Ionicons } from "@expo/vector-icons";
-import { colors, spacing, radius, heatBg, heatColor } from "@/src/theme";
-import { CellDetailModal } from "@/src/components/CellDetailModal";
-import { ControlPanelSheet } from "@/src/components/ControlPanelSheet";
+import { colors, spacing, radius } from "@/src/theme";
 import { useStrategy } from "@/src/state/strategy-context";
 import {
-  RISK_LEVELS, RR_LEVELS, runSimulation,
-  riskOfRuin, profitFactor, expectancyR,
+  RISK_LEVELS, simulateMatrixCell, MatrixCell,
 } from "@/src/engine/calculator";
+import { passColor } from "@/src/components/passColor";
 
-const CELL_W = 78;
-const CELL_H = 56;
-const ROW_LABEL_W = 64;
-const HEADER_H = 56;
+// Survival Matrix spec: 6 RR columns, 16 risk rows (0.25%..4.00% step 0.25%)
+const RR_SET = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0];
 
-interface Cell { pass: number; ev: number; roi: number; wr: number; }
+const CELL_W = 60;
+const CELL_H = 60;
+const ROW_LABEL_W = 78;
+const HEADER_H = 50;
 
-export default function MatricesScreen() {
-  const sheet = useRef<BottomSheet>(null);
-  const { inputs } = useStrategy();
-  const [mode, setMode] = useState<"pass" | "roi">("pass");
-  const [wrMode, setWrMode] = useState<"iso" | "fixed">("iso");
-  const [selected, setSelected] = useState<{ ri: number; ci: number } | null>(null);
+const fmt$ = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
-  // Derive per-column WR
-  // - iso: solve p*rr - (1-p) = userExpectancy → p = (E + 1)/(rr + 1)
-  //   This makes ALL columns share the user's current expectancy, isolating the variance effect.
-  //   When the user adjusts WR or RR, every column's WR shifts → cells change accordingly.
-  // - fixed: use user's input WR for all columns (varying only RR).
-  const userExp = useMemo(() => expectancyR(inputs.winRate, inputs.rr), [inputs.winRate, inputs.rr]);
-  const colWRs = useMemo<number[]>(() => {
-    if (wrMode === "fixed") return RR_LEVELS.map(() => inputs.winRate);
-    return RR_LEVELS.map(rr => {
-      const p = (userExp + 1) / (rr + 1);
-      return Math.max(1, Math.min(99, p * 100));
-    });
-  }, [wrMode, inputs.winRate, userExp]);
+interface NumProps {
+  label: string;
+  value: number;
+  onCommit: (n: number) => void;
+  step?: number;
+  suffix?: string;
+  testID?: string;
+  width?: number;
+}
 
-  // Compute cells via mini-Monte-Carlo respecting user's DD mode (trailing/static).
-  // 16 × 8 = 128 cells × 200 paths × 300 trades ≈ 7.7M iterations → <1s on modern devices.
-  const cells = useMemo<Cell[][]>(() => {
-    const target = inputs.accountSize * (inputs.profitTargetPct / 100);
-    const profitDollar = target * (inputs.profitSplitPct / 100);
-    return RISK_LEVELS.map((risk) =>
-      RR_LEVELS.map((rr, ci) => {
-        const wr = colWRs[ci];
-        // Adaptive horizon = enough trades to give slow-grinders a fair chance.
-        // Floor at user's tradesPerSimulation so reducing it tightens the matrix.
-        const expR = (wr / 100) * rr - (1 - wr / 100);
-        const unitsTarget = inputs.profitTargetPct / risk;
-        const adaptive = expR > 0
-          ? Math.ceil((unitsTarget / expR) * 4)
-          : 600;
-        const horizon = Math.max(50, Math.min(2000, Math.max(adaptive, inputs.tradesPerSimulation)));
-        const r = runSimulation({
-          winRate: wr / 100,
-          rr,
-          riskPerTradePct: risk,
-          accountSize: inputs.accountSize,
-          profitTargetPct: inputs.profitTargetPct,
-          maxDrawdownPct: inputs.maxDrawdownPct,
-          dailyDrawdownPct: inputs.dailyDrawdownPct,
-          consistencyRulePct: inputs.consistencyRulePct,
-          tradesPerDay: inputs.tradesPerDay,
-          tradesPerSimulation: horizon,
-          ddMode: inputs.ddMode,
-          paths: 200,
-          profitSplitPct: inputs.profitSplitPct,
-          challengeFee: inputs.challengeFee,
-          collectPaths: 0,
-        });
-        const pass = r.passProbability;
-        const ev = (pass / 100) * profitDollar - (1 - pass / 100) * inputs.challengeFee;
-        const roi = inputs.challengeFee > 0 ? (ev / inputs.challengeFee) * 100 : 0;
-        return { pass, ev, roi, wr };
-      })
-    );
-  }, [inputs, colWRs]);
-
-  const handleCellPress = (ri: number, ci: number) => setSelected({ ri, ci });
-
-  const sel = selected
-    ? {
-        risk: RISK_LEVELS[selected.ri],
-        rr: RR_LEVELS[selected.ci],
-        wr: colWRs[selected.ci],
-        ...cells[selected.ri][selected.ci],
-        ror: riskOfRuin(colWRs[selected.ci], RR_LEVELS[selected.ci], RISK_LEVELS[selected.ri], inputs.maxDrawdownPct),
-        expectancy: expectancyR(colWRs[selected.ci], RR_LEVELS[selected.ci]),
-        pf: profitFactor(colWRs[selected.ci], RR_LEVELS[selected.ci]),
-        drawdown: RISK_LEVELS[selected.ri] * 3,
-      }
-    : null;
-
-  const renderCell = (ri: number, ci: number) => {
-    const c = cells[ri]?.[ci];
-    if (!c) return <View key={ci} style={s.cell} />;
-    const bg = heatBg(c.pass);
-    const stroke = heatColor(c.pass);
-    const main = mode === "pass" ? `${c.pass.toFixed(1)}%` : `${c.roi >= 0 ? "+" : ""}${c.roi.toFixed(0)}%`;
-    const sub = mode === "pass"
-      ? `${c.ev >= 0 ? "+" : "−"}$${Math.abs(c.ev).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-      : `${c.pass.toFixed(0)}%`;
-    return (
-      <Pressable
-        key={ci}
-        testID={`heat-cell-${ri}-${ci}`}
-        onPress={() => handleCellPress(ri, ci)}
-        style={({ pressed }) => [s.cell, { backgroundColor: bg, borderColor: stroke }, pressed && { opacity: 0.6 }]}>
-        <Text style={s.cellMain} numberOfLines={1}>{main}</Text>
-        <Text style={s.cellSub} numberOfLines={1}>{sub}</Text>
-      </Pressable>
-    );
+const NumInput: React.FC<NumProps> = ({ label, value, onCommit, suffix, testID, width }) => {
+  const [txt, setTxt] = useState(String(value));
+  useEffect(() => { setTxt(String(value)); }, [value]);
+  const commit = () => {
+    const n = parseFloat(txt);
+    if (!isNaN(n)) onCommit(n);
+    else setTxt(String(value));
   };
+  return (
+    <View style={[s.field, width ? { width } : { flex: 1 }]}>
+      <Text style={s.fieldLabel}>{label}</Text>
+      <View style={s.inputRow}>
+        <TextInput
+          testID={testID}
+          style={s.input}
+          value={txt}
+          keyboardType="numeric"
+          onChangeText={setTxt}
+          onBlur={commit}
+          onSubmitEditing={commit}
+          placeholder="0"
+          placeholderTextColor={colors.textDim}
+          selectionColor={colors.success}
+        />
+        {suffix ? <Text style={s.suffix}>{suffix}</Text> : null}
+      </View>
+    </View>
+  );
+};
+
+export default function SurvivalMatrix() {
+  const { inputs, setInputs } = useStrategy();
+  const [cells, setCells] = useState<(MatrixCell | null)[][]>(() =>
+    RISK_LEVELS.map(() => RR_SET.map(() => null))
+  );
+  const [progress, setProgress] = useState<number>(0);
+  const [computing, setComputing] = useState(false);
+  const cancelRef = useRef<{ cancelled: boolean } | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Per-column WR via Edge formula
+  const colWRs = useMemo(() => RR_SET.map(rr => (1 + inputs.edge) / (1 + rr)), [inputs.edge]);
+
+  // Schedule recompute (debounced)
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      // Cancel any prior run
+      if (cancelRef.current) cancelRef.current.cancelled = true;
+      const myToken = { cancelled: false };
+      cancelRef.current = myToken;
+      setComputing(true);
+      setProgress(0);
+
+      const totalTrades = Math.max(1, Math.floor(inputs.tradesPerDay * inputs.evaluationDays));
+      const numSims = Math.max(50, Math.floor(inputs.matrixSimulations));
+
+      const grid: (MatrixCell | null)[][] = RISK_LEVELS.map(() => RR_SET.map(() => null));
+
+      let ri = 0;
+      const computeNextRow = () => {
+        if (myToken.cancelled) return;
+        if (ri >= RISK_LEVELS.length) {
+          setComputing(false);
+          setProgress(1);
+          return;
+        }
+        const risk = RISK_LEVELS[ri];
+        const rowCells: MatrixCell[] = RR_SET.map((rr, ci) => {
+          const wr = (1 + inputs.edge) / (1 + rr);
+          return simulateMatrixCell({
+            winRate: Math.max(0.0001, Math.min(0.9999, wr)),
+            rrRatio: rr,
+            riskPct: risk,
+            totalTrades,
+            tradesPerDay: inputs.tradesPerDay,
+            profitTargetPct: inputs.profitTargetPct,
+            maxDailyLossPct: inputs.dailyDrawdownPct,
+            maxOverallDDPct: inputs.maxDrawdownPct,
+            consistencyRuleOn: inputs.consistencyRuleOn,
+            consistencyThresholdPct: inputs.consistencyThresholdPct,
+            numSimulations: numSims,
+            seed: 0x9E37_79B1 ^ (ri * 1000 + ci),
+          });
+        });
+        grid[ri] = rowCells;
+        ri += 1;
+        // Update progress every few rows to reduce re-renders
+        setProgress(ri / RISK_LEVELS.length);
+        // Only commit grid every 4 rows OR on completion
+        if (ri % 4 === 0 || ri === RISK_LEVELS.length) {
+          setCells(grid.map(row => row.slice()));
+        }
+        setTimeout(computeNextRow, 0); // yield to UI
+      };
+      setTimeout(computeNextRow, 0);
+    }, 280);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [
+    inputs.tradesPerDay, inputs.evaluationDays, inputs.matrixSimulations,
+    inputs.edge, inputs.accountSize, inputs.profitTargetPct,
+    inputs.dailyDrawdownPct, inputs.maxDrawdownPct,
+    inputs.consistencyRuleOn, inputs.consistencyThresholdPct,
+  ]);
+
+  const scenarioLabel = useMemo(() => {
+    if (inputs.consistencyRuleOn) return `Consistency Rule · ${inputs.tradesPerDay} Trade${inputs.tradesPerDay > 1 ? "s" : ""} Per Day`;
+    if (inputs.tradesPerDay > 1) return `${inputs.tradesPerDay} Trades Per Day`;
+    return inputs.edge > 0 ? "Positive Edge" : "Zero Edge";
+  }, [inputs.consistencyRuleOn, inputs.tradesPerDay, inputs.edge]);
+
+  const ddCaption = useMemo(() => {
+    // Heuristic: tight when tradesPerDay × evaluationDays × riskPct is high (more chances to trail)
+    const exposure = inputs.tradesPerDay * inputs.evaluationDays;
+    if (exposure >= 60) return "Max DD trails tight with every trade.";
+    if (exposure >= 20) return "Max DD trails moderately as equity grows.";
+    return "Max DD trails looser with sparse trading.";
+  }, [inputs.tradesPerDay, inputs.evaluationDays]);
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
-      <View style={s.header}>
-        <View>
-          <Text style={s.eyebrow}>HEATMAP</Text>
-          <Text style={s.title}>Risk × Reward Matrix</Text>
+      <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+        <View style={s.header}>
+          <Text style={s.eyebrow}>PROBABILITY DASHBOARD</Text>
+          <Text style={s.title}>Risk / Reward Survival Matrix</Text>
+          <Text style={s.scenario}>{scenarioLabel}</Text>
         </View>
-      </View>
 
-      <View style={s.controls}>
-        <View style={s.segment}>
-          <Pressable testID="seg-pass" onPress={() => setMode("pass")} style={[s.segBtn, mode === "pass" && s.segActive]}>
-            <Text style={[s.segTxt, mode === "pass" && s.segTxtActive]}>Pass %</Text>
-          </Pressable>
-          <Pressable testID="seg-roi" onPress={() => setMode("roi")} style={[s.segBtn, mode === "roi" && s.segActive]}>
-            <Text style={[s.segTxt, mode === "roi" && s.segTxtActive]}>ROI</Text>
-          </Pressable>
-        </View>
-        <View style={s.segmentSmall}>
-          <Pressable testID="seg-iso" onPress={() => setWrMode("iso")} style={[s.segBtnSm, wrMode === "iso" && s.segActiveAlt]}>
-            <Text style={[s.segTxtSm, wrMode === "iso" && s.segTxtActiveAlt]}>Iso-E</Text>
-          </Pressable>
-          <Pressable testID="seg-fixed" onPress={() => setWrMode("fixed")} style={[s.segBtnSm, wrMode === "fixed" && s.segActiveAlt]}>
-            <Text style={[s.segTxtSm, wrMode === "fixed" && s.segTxtActiveAlt]}>Fixed WR</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <ScrollView contentContainerStyle={s.scroll}>
-        <Text style={s.caption}>
-          {wrMode === "iso"
-            ? `Each column's WR is calibrated to your current expectancy of ${userExp.toFixed(2)} R (from ${inputs.winRate}% WR @ ${inputs.rr} RR). Cells respond to every input.`
-            : `All columns use your input win rate of ${inputs.winRate}% — varying RR only.`}
-          {`  ·  DD mode: ${inputs.ddMode}`}
-        </Text>
-
-        <View style={s.matrixWrap}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View>
-              {/* Header row with WR under each RR */}
-              <View style={s.headerRow}>
-                <View style={[s.cornerCell, { width: ROW_LABEL_W, height: HEADER_H }]}>
-                  <Text style={s.axisLabel}>Risk / RR</Text>
-                </View>
-                {RR_LEVELS.map((rr, ci) => (
-                  <View key={ci} style={[s.headerCell, { width: CELL_W, height: HEADER_H }]}>
-                    <Text style={s.headerTxt}>{rr.toFixed(2)} RR</Text>
-                    <Text style={s.headerSub}>{colWRs[ci].toFixed(1)}% WR</Text>
-                  </View>
-                ))}
-              </View>
-              {/* Rows scroll vertically */}
-              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 440 }} nestedScrollEnabled>
-                {RISK_LEVELS.map((risk, ri) => (
-                  <View key={ri} style={s.row}>
-                    <View style={[s.rowLabelCell, { width: ROW_LABEL_W }]}>
-                      <Text style={s.headerTxt}>{risk.toFixed(2)}%</Text>
-                      <Text style={s.headerSub}>${(inputs.accountSize * risk / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}/trade</Text>
-                    </View>
-                    {RR_LEVELS.map((_, ci) => renderCell(ri, ci))}
-                  </View>
-                ))}
-              </ScrollView>
+        {/* Controls panel */}
+        <View style={s.controls}>
+          {/* Trades per day button group */}
+          <View style={s.section}>
+            <Text style={s.sectionLabel}>Trades Per Day</Text>
+            <View style={s.btnGroup}>
+              {[1, 2, 3, 5, 10].map(n => {
+                const active = inputs.tradesPerDay === n;
+                return (
+                  <Pressable
+                    key={n}
+                    testID={`tpd-${n}`}
+                    onPress={() => setInputs({ tradesPerDay: n })}
+                    style={[s.tpdBtn, active && s.tpdBtnActive]}>
+                    <Text style={[s.tpdTxt, active && s.tpdTxtActive]}>{n}</Text>
+                  </Pressable>
+                );
+              })}
             </View>
-          </ScrollView>
+          </View>
+
+          {/* Consistency rule */}
+          <View style={s.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.toggleLabel}>Consistency Rule</Text>
+              <Text style={s.toggleSub}>Fail sims where any single day &gt; threshold of total profit</Text>
+            </View>
+            <Switch
+              testID="toggle-consistency"
+              value={inputs.consistencyRuleOn}
+              onValueChange={(v) => setInputs({ consistencyRuleOn: v })}
+              trackColor={{ false: colors.surface3, true: colors.warning }}
+              thumbColor={"#fff"}
+            />
+          </View>
+          {inputs.consistencyRuleOn ? (
+            <View style={s.row2}>
+              <NumInput label="Threshold" value={inputs.consistencyThresholdPct}
+                onCommit={(n) => setInputs({ consistencyThresholdPct: Math.max(1, Math.min(100, n)) })}
+                suffix="%" testID="input-consist-threshold" />
+              <View style={{ flex: 1 }} />
+            </View>
+          ) : null}
+
+          {/* Account & challenge spec */}
+          <View style={s.row2}>
+            <NumInput label="Account Size" value={inputs.accountSize}
+              onCommit={(n) => setInputs({ accountSize: Math.max(1, n) })}
+              suffix="$" testID="input-account-size" />
+            <NumInput label="Evaluation Days" value={inputs.evaluationDays}
+              onCommit={(n) => setInputs({ evaluationDays: Math.max(1, Math.floor(n)) })}
+              testID="input-eval-days" />
+          </View>
+          <View style={s.row2}>
+            <NumInput label="Profit Target" value={inputs.profitTargetPct}
+              onCommit={(n) => setInputs({ profitTargetPct: Math.max(0.1, n) })}
+              suffix="%" testID="input-target" />
+            <NumInput label="Max Daily Loss" value={inputs.dailyDrawdownPct}
+              onCommit={(n) => setInputs({ dailyDrawdownPct: Math.max(0.1, n) })}
+              suffix="%" testID="input-daily" />
+          </View>
+          <View style={s.row2}>
+            <NumInput label="Max Overall DD" value={inputs.maxDrawdownPct}
+              onCommit={(n) => setInputs({ maxDrawdownPct: Math.max(0.1, n) })}
+              suffix="%" testID="input-max-dd" />
+            <NumInput label="Edge (R)" value={inputs.edge}
+              onCommit={(n) => setInputs({ edge: Math.max(-1, Math.min(2, n)) })}
+              testID="input-edge" />
+          </View>
+          <View style={s.row2}>
+            <NumInput label="Number of Simulations" value={inputs.matrixSimulations}
+              onCommit={(n) => setInputs({ matrixSimulations: Math.max(50, Math.min(20000, Math.floor(n))) })}
+              testID="input-sims" />
+            <View style={{ flex: 1 }} />
+          </View>
         </View>
 
-        <View style={s.legend} testID="heatmap-legend">
-          <View style={s.legendItem}><View style={[s.swatch, { backgroundColor: colors.danger }]} /><Text style={s.legendTxt}>0–35%</Text></View>
-          <View style={s.legendItem}><View style={[s.swatch, { backgroundColor: colors.warning }]} /><Text style={s.legendTxt}>36–64%</Text></View>
-          <View style={s.legendItem}><View style={[s.swatch, { backgroundColor: colors.success }]} /><Text style={s.legendTxt}>65–100%</Text></View>
+        {/* Progress bar */}
+        <View style={s.progressWrap}>
+          <View style={[s.progressBar, { width: `${Math.round(progress * 100)}%` }]} />
+          {computing ? (
+            <View style={s.progressOverlay}>
+              <ActivityIndicator size="small" color={colors.success} />
+              <Text style={s.progressTxt}>Simulating · {Math.round(progress * 100)}%</Text>
+            </View>
+          ) : null}
         </View>
-        <Text style={s.footnote}>Cells computed via Monte Carlo (200 paths × 300 trades) honouring your {inputs.ddMode} drawdown mode. Tap any cell for details.</Text>
 
-        <View style={{ height: 100 }} />
+        {/* Heatmap */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg }}>
+          <View>
+            {/* Header row */}
+            <View style={s.headerRow}>
+              <View style={[s.cornerCell, { width: ROW_LABEL_W, height: HEADER_H }]}>
+                <Text style={s.axisLabel}>Risk / Trade</Text>
+              </View>
+              {RR_SET.map((rr, ci) => (
+                <View key={ci} style={[s.headerCell, { width: CELL_W, height: HEADER_H }]} testID={`col-header-${ci}`}>
+                  <Text style={s.headerRR}>{rr.toFixed(2)} RR</Text>
+                  <Text style={s.headerWR}>{(colWRs[ci] * 100).toFixed(1)}% WR</Text>
+                </View>
+              ))}
+            </View>
+            {/* Cells */}
+            {RISK_LEVELS.map((risk, ri) => {
+              const dollarPerTrade = inputs.accountSize * (risk / 100);
+              return (
+                <View key={ri} style={s.row}>
+                  <View style={[s.rowLabelCell, { width: ROW_LABEL_W }]}>
+                    <Text style={s.rowRisk}>{risk.toFixed(2)}%</Text>
+                    <Text style={s.rowDollar}>{fmt$(dollarPerTrade)}/trade</Text>
+                  </View>
+                  {RR_SET.map((_, ci) => {
+                    const c = cells[ri]?.[ci];
+                    if (!c) {
+                      return <View key={ci} style={[s.cell, { backgroundColor: colors.panel }]} testID={`cell-${ri}-${ci}`}>
+                        <Text style={s.cellPending}>·</Text>
+                      </View>;
+                    }
+                    const col = passColor(c.passPct);
+                    const retSign = c.avgReturnPct >= 0 ? "+" : "−";
+                    const retVal = `${retSign}${Math.abs(c.avgReturnPct).toFixed(1)}%`;
+                    return (
+                      <View key={ci} style={[s.cell, { backgroundColor: col.fill }]} testID={`cell-${ri}-${ci}`}>
+                        <Text style={[s.cellMain, { color: col.text }]}>{c.passPct.toFixed(1)}%</Text>
+                        <Text style={[s.cellSub, { color: c.avgReturnPct >= 0 ? "#0BD37B" : "#FF6E6E" }]}>{retVal}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              );
+            })}
+          </View>
+        </ScrollView>
+
+        {/* Caption */}
+        <Text style={s.ddCaption} testID="dd-caption">{ddCaption}</Text>
+
+        {/* Legend */}
+        <View style={s.legend}>
+          <View style={s.legendBar}>
+            {[0, 25, 50, 75, 100].map(p => {
+              const col = passColor(p);
+              return <View key={p} style={[s.legendStop, { backgroundColor: col.fill }]} />;
+            })}
+          </View>
+          <View style={s.legendLabels}>
+            <Text style={s.legendTxt}>0%</Text>
+            <Text style={s.legendTxt}>50%</Text>
+            <Text style={s.legendTxt}>100%</Text>
+          </View>
+          <Text style={s.legendCaption}>Top number = % of {inputs.matrixSimulations.toLocaleString()} sims that PASSED · Bottom = average ending return %</Text>
+        </View>
       </ScrollView>
-
-      <Pressable
-        testID="open-control-panel-matrices"
-        onPress={() => sheet.current?.snapToIndex(0)}
-        style={({ pressed }) => [s.fab, pressed && { opacity: 0.85 }]}>
-        <Ionicons name="options-outline" color={colors.bg} size={20} />
-        <Text style={s.fabTxt}>Control Panel</Text>
-      </Pressable>
-
-      <ControlPanelSheet ref={sheet} />
-
-      {sel ? (
-        <CellDetailModal
-          visible={!!selected}
-          onClose={() => setSelected(null)}
-          risk={sel.risk} rr={sel.rr} pass={sel.pass} ev={sel.ev}
-          ror={sel.ror} expectancy={sel.expectancy} pf={sel.pf} drawdown={sel.drawdown}
-        />
-      ) : null}
     </SafeAreaView>
   );
 }
@@ -224,64 +328,54 @@ const s = StyleSheet.create({
   },
   eyebrow: { color: colors.textMuted, fontSize: 10, fontWeight: "700", letterSpacing: 1.4 },
   title: { color: colors.text, fontSize: 22, fontWeight: "800", marginTop: 2 },
-  controls: {
-    flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.md,
-  },
-  segment: {
-    flex: 1, flexDirection: "row",
-    backgroundColor: colors.panel, borderRadius: radius.md, padding: 4, borderColor: colors.border, borderWidth: 1,
-  },
-  segBtn: { flex: 1, paddingVertical: 9, alignItems: "center", borderRadius: radius.sm },
-  segActive: { backgroundColor: colors.success },
-  segTxt: { color: colors.textMuted, fontWeight: "700", fontSize: 12 },
-  segTxtActive: { color: colors.bg },
-  segmentSmall: {
-    flexDirection: "row", backgroundColor: colors.panel, borderRadius: radius.md, padding: 4, borderColor: colors.border, borderWidth: 1,
-  },
-  segBtnSm: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.sm },
-  segActiveAlt: { backgroundColor: colors.info },
-  segTxtSm: { color: colors.textMuted, fontWeight: "700", fontSize: 11 },
-  segTxtActiveAlt: { color: colors.bg },
-  scroll: { padding: spacing.lg, gap: spacing.md },
-  caption: { color: colors.textMuted, fontSize: 11, lineHeight: 16 },
-  matrixWrap: {
-    backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.sm,
+  scenario: { color: colors.success, fontSize: 12, fontWeight: "800", letterSpacing: 1, marginTop: 6, textTransform: "uppercase" },
+  controls: { padding: spacing.lg, gap: spacing.md },
+  section: { gap: spacing.sm },
+  sectionLabel: { color: colors.textMuted, fontSize: 11, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
+  btnGroup: { flexDirection: "row", gap: spacing.sm },
+  tpdBtn: { flex: 1, paddingVertical: 12, backgroundColor: colors.panel, borderRadius: radius.sm, borderColor: colors.border, borderWidth: 1, alignItems: "center" },
+  tpdBtnActive: { backgroundColor: colors.success, borderColor: colors.success },
+  tpdTxt: { color: colors.textMuted, fontSize: 14, fontWeight: "800" },
+  tpdTxtActive: { color: colors.bg },
+  toggleRow: {
+    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    backgroundColor: colors.card, borderRadius: radius.md, padding: spacing.md,
     borderColor: colors.border, borderWidth: 1,
   },
-  headerRow: { flexDirection: "row" },
+  toggleLabel: { color: colors.text, fontSize: 14, fontWeight: "700" },
+  toggleSub: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  row2: { flexDirection: "row", gap: spacing.md },
+  field: { },
+  fieldLabel: { color: colors.textMuted, fontSize: 10, fontWeight: "600", letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 4 },
+  inputRow: { flexDirection: "row", alignItems: "center", backgroundColor: colors.panel, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.md },
+  input: { flex: 1, color: colors.text, paddingVertical: 10, fontSize: 15, fontWeight: "700" },
+  suffix: { color: colors.textMuted, fontSize: 13, marginLeft: 6 },
+  progressWrap: { height: 4, backgroundColor: colors.panel, marginHorizontal: spacing.lg, borderRadius: 2, overflow: "hidden", position: "relative" },
+  progressBar: { height: 4, backgroundColor: colors.success },
+  progressOverlay: { position: "absolute", right: 8, top: -22, flexDirection: "row", gap: 6, alignItems: "center" },
+  progressTxt: { color: colors.success, fontSize: 10, fontWeight: "700" },
+  headerRow: { flexDirection: "row", marginTop: spacing.md },
   row: { flexDirection: "row" },
-  cornerCell: {
-    alignItems: "center", justifyContent: "center",
-    backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 0.5,
-  },
-  headerCell: {
-    alignItems: "center", justifyContent: "center", padding: 2,
-    backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 0.5,
-  },
-  rowLabelCell: {
-    height: CELL_H, alignItems: "center", justifyContent: "center", padding: 2,
-    backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 0.5,
-  },
-  cell: {
-    width: CELL_W, height: CELL_H, alignItems: "center", justifyContent: "center",
-    borderWidth: 0.5, padding: 4,
-  },
+  cornerCell: { alignItems: "center", justifyContent: "center", backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 0.5 },
+  headerCell: { alignItems: "center", justifyContent: "center", backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 0.5, padding: 2 },
+  rowLabelCell: { height: CELL_H, alignItems: "center", justifyContent: "center", backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 0.5, padding: 2 },
+  cell: { width: CELL_W, height: CELL_H, alignItems: "center", justifyContent: "center", borderColor: "#000", borderWidth: 0.3 },
   axisLabel: { color: colors.textMuted, fontSize: 9, fontWeight: "700", textAlign: "center" },
-  headerTxt: { color: colors.text, fontSize: 12, fontWeight: "700", textAlign: "center" },
-  headerSub: { color: colors.textMuted, fontSize: 9, fontWeight: "600", marginTop: 2, textAlign: "center" },
-  cellMain: { color: colors.text, fontSize: 13, fontWeight: "800", textAlign: "center" },
-  cellSub: { color: colors.text, fontSize: 10, fontWeight: "500", textAlign: "center", marginTop: 2, opacity: 0.9 },
-  legend: { flexDirection: "row", gap: spacing.lg, justifyContent: "center", marginTop: spacing.sm },
-  legendItem: { flexDirection: "row", gap: 6, alignItems: "center" },
-  swatch: { width: 14, height: 14, borderRadius: 3 },
-  legendTxt: { color: colors.textMuted, fontSize: 11, fontWeight: "600" },
-  footnote: { color: colors.textDim, fontSize: 10, fontStyle: "italic", textAlign: "center" },
-  fab: {
-    position: "absolute", bottom: 92, right: spacing.lg,
-    backgroundColor: colors.success, paddingHorizontal: 16, paddingVertical: 12,
-    borderRadius: radius.pill, flexDirection: "row", gap: 8, alignItems: "center",
-    shadowColor: colors.success, shadowOpacity: 0.4, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+  headerRR: { color: colors.text, fontSize: 13, fontWeight: "800", textAlign: "center" },
+  headerWR: { color: colors.textMuted, fontSize: 10, fontWeight: "600", marginTop: 2, textAlign: "center" },
+  rowRisk: { color: colors.text, fontSize: 13, fontWeight: "800" },
+  rowDollar: { color: colors.textMuted, fontSize: 10, fontWeight: "500", marginTop: 2 },
+  cellMain: { fontSize: 14, fontWeight: "900", textAlign: "center" },
+  cellSub: { fontSize: 10, fontWeight: "700", marginTop: 2, textAlign: "center" },
+  cellPending: { color: colors.textDim, fontSize: 18, fontWeight: "800" },
+  ddCaption: {
+    color: colors.textMuted, fontSize: 12, fontStyle: "italic",
+    textAlign: "center", paddingHorizontal: spacing.lg, marginTop: spacing.md,
   },
-  fabTxt: { color: colors.bg, fontWeight: "800", fontSize: 13 },
+  legend: { paddingHorizontal: spacing.lg, marginTop: spacing.lg, gap: 6 },
+  legendBar: { flexDirection: "row", height: 12, borderRadius: 4, overflow: "hidden" },
+  legendStop: { flex: 1, height: 12 },
+  legendLabels: { flexDirection: "row", justifyContent: "space-between" },
+  legendTxt: { color: colors.textMuted, fontSize: 10, fontWeight: "600" },
+  legendCaption: { color: colors.textDim, fontSize: 10, textAlign: "center", marginTop: 4, fontStyle: "italic" },
 });
